@@ -1,3 +1,5 @@
+**[[中文]][readme_zh]** **[[English]][readme_en]**
+
 # DXGI 屏幕捕获工具
 
 ## 项目概述
@@ -46,3 +48,7 @@ if __name__ == "__main__":
 ## 许可证
 
 MIT 许可证（详见 LICENSE）。DLL 版权归 mono 所有，遵守其许可协议。
+
+
+[readme_zh]: /docs/zh/README.md
+[readme_en]: /docs/en/README.md
