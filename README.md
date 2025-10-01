@@ -1,4 +1,4 @@
-**[中文][readme_zh]**
+**[[中文]][readme_zh]**
 
 # DXGI Screen Capture Tool
 
