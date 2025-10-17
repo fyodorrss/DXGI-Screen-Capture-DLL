@@ -8,12 +8,12 @@
 
 std::mutex capture_mutex_;
 
-// ¹¹Ôìº¯Êı£¬ÀïÃæÊ²Ã´Ò²²»×ö
+// æ„é€ å‡½æ•°ï¼Œé‡Œé¢ä»€ä¹ˆä¹Ÿä¸åš
 DXGIDuplicator::DXGIDuplicator()
 {
 }
 
-// Îö¹¹º¯Êı£¬ÊÍ·ÅÏà¹Ø¶ÔÏó
+// ææ„å‡½æ•°ï¼Œé‡Šæ”¾ç›¸å…³å¯¹è±¡
 DXGIDuplicator::~DXGIDuplicator()
 {
     if (duplication_)
@@ -30,107 +30,123 @@ DXGIDuplicator::~DXGIDuplicator()
     }
 }
 
+#include <dxgi1_2.h>
+#include <d3d11.h>
+#include <vector>
+#include <iostream>
+
 bool DXGIDuplicator::InitD3D11Device()
 {
-    D3D_DRIVER_TYPE DriverTypes[] =
-    {
-        D3D_DRIVER_TYPE_HARDWARE,
-        D3D_DRIVER_TYPE_WARP,
-        D3D_DRIVER_TYPE_REFERENCE,
-    };
-    UINT NumDriverTypes = ARRAYSIZE(DriverTypes);
+    IDXGIFactory1* factory = nullptr;
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
+    if (FAILED(hr))
+        return false;
 
-    D3D_FEATURE_LEVEL FeatureLevels[] =
+    IDXGIAdapter1* selectedAdapter = nullptr;
+
+    // éå†æ‰€æœ‰ Adapter
+    IDXGIAdapter1* adapter = nullptr;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i)
     {
+        UINT outputIndex = 0;
+        IDXGIOutput* output = nullptr;
+        while (adapter->EnumOutputs(outputIndex++, &output) != DXGI_ERROR_NOT_FOUND)
+        {
+            DXGI_OUTPUT_DESC desc;
+            output->GetDesc(&desc);
+            output->Release();
+
+            // æ‰¾åˆ°æœ‰æ˜¾ç¤ºå™¨è¿æ¥çš„ Adapter å°±é€‰å®ƒ
+            if (desc.AttachedToDesktop)
+            {
+                selectedAdapter = adapter;
+                break;
+            }
+        }
+
+        if (selectedAdapter)
+            break;
+        adapter->Release();
+    }
+
+    factory->Release();
+
+    if (!selectedAdapter)
+        return false;
+
+    // ä½¿ç”¨é€‰å®šçš„ Adapter åˆ›å»º D3D11 Device
+    D3D_FEATURE_LEVEL FeatureLevels[] = {
         D3D_FEATURE_LEVEL_11_0,
         D3D_FEATURE_LEVEL_10_1,
         D3D_FEATURE_LEVEL_10_0,
         D3D_FEATURE_LEVEL_9_1
     };
-    UINT NumFeatureLevels = ARRAYSIZE(FeatureLevels);
     D3D_FEATURE_LEVEL FeatureLevel;
 
-    for (UINT DriverTypeIndex = 0; DriverTypeIndex < NumDriverTypes; ++DriverTypeIndex)
-    {
-        HRESULT hr = D3D11CreateDevice(
-            nullptr,
-            DriverTypes[DriverTypeIndex],
-            nullptr, 0,
-            FeatureLevels,
-            NumFeatureLevels,
-            D3D11_SDK_VERSION,
-            &device_,
-            &FeatureLevel,
-            &deviceContext_);
-        if (SUCCEEDED(hr))
-        {
-            break;
-        }
-    }
+    hr = D3D11CreateDevice(
+        selectedAdapter,              // æŒ‡å®š GPU
+        D3D_DRIVER_TYPE_UNKNOWN,      // ä½¿ç”¨æŒ‡å®š Adapter
+        nullptr,
+        0,
+        FeatureLevels,
+        ARRAYSIZE(FeatureLevels),
+        D3D11_SDK_VERSION,
+        &device_,
+        &FeatureLevel,
+        &deviceContext_
+    );
 
-    if (device_ == nullptr || deviceContext_ == nullptr)
-    {
-        return false;
-    }
+    selectedAdapter->Release();
 
-    return true;
+    return SUCCEEDED(hr) && device_ && deviceContext_;
 }
 
 bool DXGIDuplicator::InitDuplication()
 {
-    HRESULT hr = S_OK;
+    if (!device_)
+        return false;
 
     IDXGIDevice* dxgiDevice = nullptr;
-    hr = device_->QueryInterface(__uuidof(IDXGIDevice), reinterpret_cast<void**>(&dxgiDevice));
-    if (FAILED(hr))
-    {
+    if (FAILED(device_->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDevice)))
         return false;
-    }
 
     IDXGIAdapter* dxgiAdapter = nullptr;
-    hr = dxgiDevice->GetAdapter(&dxgiAdapter);
-    dxgiDevice->Release();
-    if (FAILED(hr))
+    if (FAILED(dxgiDevice->GetAdapter(&dxgiAdapter)))
     {
+        dxgiDevice->Release();
         return false;
     }
+    dxgiDevice->Release();
 
-    UINT output = 0;
+    // æ‰¾ç¬¬ä¸€ä¸ªæœ‰æ˜¾ç¤ºå™¨è¿æ¥çš„è¾“å‡º
     IDXGIOutput* dxgiOutput = nullptr;
-    while (true)
+    UINT outputIndex = 0;
+    while (dxgiAdapter->EnumOutputs(outputIndex++, &dxgiOutput) != DXGI_ERROR_NOT_FOUND)
     {
-        hr = dxgiAdapter->EnumOutputs(output++, &dxgiOutput);
-        if (hr == DXGI_ERROR_NOT_FOUND)
-        {
-            return false;
-        }
-        else
-        {
-            DXGI_OUTPUT_DESC desc;
-            dxgiOutput->GetDesc(&desc);
-            int width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
-            int height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+        DXGI_OUTPUT_DESC desc;
+        dxgiOutput->GetDesc(&desc);
+        if (desc.AttachedToDesktop)
             break;
-        }
+        dxgiOutput->Release();
+        dxgiOutput = nullptr;
     }
+
     dxgiAdapter->Release();
+    if (!dxgiOutput)
+        return false;
 
     IDXGIOutput1* dxgiOutput1 = nullptr;
-    hr = dxgiOutput->QueryInterface(__uuidof(IDXGIOutput1), reinterpret_cast<void**>(&dxgiOutput1));
+    if (FAILED(dxgiOutput->QueryInterface(__uuidof(IDXGIOutput1), (void**)&dxgiOutput1)))
+    {
+        dxgiOutput->Release();
+        return false;
+    }
     dxgiOutput->Release();
-    if (FAILED(hr))
-    {
-        return false;
-    }
 
-    hr = dxgiOutput1->DuplicateOutput(device_, &duplication_);
+    HRESULT hr = dxgiOutput1->DuplicateOutput(device_, &duplication_);
     dxgiOutput1->Release();
-    if (FAILED(hr))
-    {
-        return false;
-    }
 
-    return true;
+    return SUCCEEDED(hr);
 }
 
 
@@ -198,7 +214,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
     IDXGIResource* resource = nullptr;
     ID3D11Texture2D* acquireFrame = nullptr;
 
-    // ¾²Ì¬»º´æÍêÕûÖ¡£¨²»ÔÙ»º´æ²Ã¼ôÇøÓò£©
+    // é™æ€ç¼“å­˜å®Œæ•´å¸§ï¼ˆä¸å†ç¼“å­˜è£å‰ªåŒºåŸŸï¼‰
     static uint8_t* cachedFullBuffer = nullptr;
     static int cachedFullStride = 0;
     static int cachedFullWidth = 0;
@@ -215,7 +231,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT)
         {
-            // Ê¹ÓÃ»º´æµÄÍêÕûÖ¡²Ã¼ô·µ»Ø
+            // ä½¿ç”¨ç¼“å­˜çš„å®Œæ•´å¸§è£å‰ªè¿”å›
             if (cachedFullBuffer)
             {
                 int outW = width;
@@ -254,7 +270,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
             return false;
         }
 
-        // ³É¹¦»ñµÃĞÂÖ¡×ÊÔ´
+        // æˆåŠŸè·å¾—æ–°å¸§èµ„æº
         hr = resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&acquireFrame);
         resource->Release();
         if (FAILED(hr)) {
@@ -271,7 +287,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 
        /* if (fullDesc.Width < 100 || fullDesc.Height < 100)
         {
-            printf("[!] »ñÈ¡Ö¡³ß´çÒì³£: %d x %d£¬Ìø¹ı\n", fullDesc.Width, fullDesc.Height);
+            printf("[!] è·å–å¸§å°ºå¯¸å¼‚å¸¸: %d x %dï¼Œè·³è¿‡\n", fullDesc.Width, fullDesc.Height);
             acquireFrame->Release();
             duplication_->ReleaseFrame();
             retries++;
@@ -298,7 +314,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
             return false;
         }
 
-        // ¸´ÖÆÕûÖ¡Êı¾İ»º´æ
+        // å¤åˆ¶æ•´å¸§æ•°æ®ç¼“å­˜
         int fullRowSize = fullDesc.Width * 4;
         int fullSize = fullRowSize * fullDesc.Height;
         if (cachedFullBuffer) free(cachedFullBuffer);
@@ -321,7 +337,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
         cachedFullWidth = fullDesc.Width;
         cachedFullHeight = fullDesc.Height;
 
-        // Í¬Ê±²Ã¼ôÇëÇóÇøÓò
+        // åŒæ—¶è£å‰ªè¯·æ±‚åŒºåŸŸ
         int outX = std::max(0, std::min(left, static_cast<int>(fullDesc.Width) - 1));
         int outY = std::max(0, std::min(top, static_cast<int>(fullDesc.Height) - 1));
         int outW = std::min(width, (int)(fullDesc.Width - outX));
@@ -349,7 +365,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
         acquireFrame->Release();
         duplication_->ReleaseFrame();
 
-        // ÑéÖ¤»º³åÇø·Ç¿Õ
+        // éªŒè¯ç¼“å†²åŒºéç©º
         bool bufferIsValid = false;
         for (int i = 0; i < outH * rowSize; ++i)
         {
@@ -402,16 +418,16 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 //bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int height,
 //    uint8_t** outData, int* outStride, int* outWidth, int* outHeight)
 //{
-//    // »ñÈ¡×ÀÃæÖ¡ÎÆÀí
+//    // è·å–æ¡Œé¢å¸§çº¹ç†
 //    ID3D11Texture2D* texture = nullptr;
 //    if (!GetDesktopFrame(&texture) || !texture)
 //        return false;
 //
-//    // »ñÈ¡ÎÆÀíÃèÊöĞÅÏ¢
+//    // è·å–çº¹ç†æè¿°ä¿¡æ¯
 //    D3D11_TEXTURE2D_DESC desc;
 //    texture->GetDesc(&desc);
 //
-//    // Ó³ÉäÎÆÀíÊı¾İ¹©CPU¶ÁÈ¡
+//    // æ˜ å°„çº¹ç†æ•°æ®ä¾›CPUè¯»å–
 //    D3D11_MAPPED_SUBRESOURCE mapped;
 //    if (FAILED(deviceContext_->Map(texture, 0, D3D11_MAP_READ, 0, &mapped)))
 //    {
@@ -419,12 +435,12 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 //        return false;
 //    }
 //
-//    int bpp = 4;  // Ã¿ÏñËØ4×Ö½Ú BGRA
+//    int bpp = 4;  // æ¯åƒç´ 4å­—èŠ‚ BGRA
 //    int fullWidth = desc.Width;
 //    int fullHeight = desc.Height;
 //    int rowPitch = mapped.RowPitch;
 //
-//    // ÅĞ¶ÏÇëÇóÇøÓòÊÇ·ñÔ½½ç
+//    // åˆ¤æ–­è¯·æ±‚åŒºåŸŸæ˜¯å¦è¶Šç•Œ
 //    if (left < 0 || top < 0 || left + width > fullWidth || top + height > fullHeight)
 //    {
 //        deviceContext_->Unmap(texture, 0);
@@ -432,7 +448,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 //        return false;
 //    }
 //
-//    // ·ÖÅäÇøÓòÍ¼ÏñÄÚ´æ£¨ĞĞ¶ÔÆë=width * 4£©
+//    // åˆ†é…åŒºåŸŸå›¾åƒå†…å­˜ï¼ˆè¡Œå¯¹é½=width * 4ï¼‰
 //    int regionStride = width * bpp;
 //    uint8_t* buffer = (uint8_t*)malloc(regionStride * height);
 //    if (!buffer)
@@ -442,7 +458,7 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 //        return false;
 //    }
 //
-//    // ¿½±´Ã¿Ò»ĞĞÇøÓòÊı¾İ
+//    // æ‹·è´æ¯ä¸€è¡ŒåŒºåŸŸæ•°æ®
 //    uint8_t* src = static_cast<uint8_t*>(mapped.pData);
 //    for (int y = 0; y < height; ++y)
 //    {
@@ -453,11 +469,11 @@ bool DXGIDuplicator::GetDesktopFrameRegion(int left, int top, int width, int hei
 //        );
 //    }
 //
-//    // È¡ÏûÓ³Éä²¢ÊÍ·ÅÎÆÀí
+//    // å–æ¶ˆæ˜ å°„å¹¶é‡Šæ”¾çº¹ç†
 //    deviceContext_->Unmap(texture, 0);
 //    texture->Release();
 //
-//    // ·µ»ØÊı¾İ
+//    // è¿”å›æ•°æ®
 //    *outData = buffer;
 //    *outStride = regionStride;
 //    *outWidth = width;
